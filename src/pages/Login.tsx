@@ -62,12 +62,6 @@ export default function Login() {
             {loading ? "Entrando..." : "Entrar"}
           </button>
         </form>
-
-        <div className="mt-6 bg-muted/50 rounded-lg p-4 text-xs text-muted-foreground space-y-1">
-          <p className="font-medium text-foreground text-xs mb-2">Credenciais de acesso:</p>
-          <p><span className="font-medium">Admin:</span> admin@primus.com / admin123</p>
-          <p><span className="font-medium">Operador:</span> operador@primus.com / operador123</p>
-        </div>
       </div>
     </div>
   );
