@@ -53,10 +53,10 @@ export default function Dashboard() {
       return a + (unit - cost) * qty;
     }, 0);
 
+    // Se min_stock = 0 (default), não deve considerar como "estoque baixo"
     const low = (products ?? [])
-      .filter((p) => (p.stock ?? 0) <= (p.min_stock ?? 0))
-      .map((p) => ({ id: p.id, name: p.name, stock: p.stock ?? 0, minStock: p.min_stock ?? 0 }))
-      .slice(0, 8);
+      .filter((p) => (p.min_stock ?? 0) > 0 && (p.stock ?? 0) <= (p.min_stock ?? 0))
+      .map((p) => ({ id: p.id, name: p.name, stock: p.stock ?? 0, minStock: p.min_stock ?? 0 }));
 
     const byProduct = new Map<string, number>();
     for (const it of itemsToday) {
@@ -64,7 +64,6 @@ export default function Dashboard() {
     }
     const top = [...byProduct.entries()]
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
       .map(([name, qty]) => ({ name, qty }));
 
     setKpi({ revenue, salesCount, avgTicket, profit });
@@ -121,11 +120,13 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <motion.div variants={item} className="bg-card rounded-xl shadow-card p-5">
-            <h2 className="text-sm font-semibold text-foreground mb-4">Produtos Mais Vendidos</h2>
+            <h2 className="text-sm font-semibold text-foreground mb-4">
+              Produtos Mais Vendidos ({topProducts.length})
+            </h2>
             {topProducts.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nenhuma venda registrada ainda.</p>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2 max-h-[340px] overflow-auto pr-1">
                 {topProducts.map((p) => (
                   <div key={p.name} className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground truncate mr-3">{p.name}</span>
@@ -139,12 +140,14 @@ export default function Dashboard() {
           <motion.div variants={item} className="bg-card rounded-xl shadow-card p-5">
             <div className="flex items-center gap-2 mb-4">
               <AlertTriangle className="h-4 w-4 text-warning" />
-              <h2 className="text-sm font-semibold text-foreground">Estoque Baixo</h2>
+              <h2 className="text-sm font-semibold text-foreground">
+                Estoque Baixo ({lowStock.length})
+              </h2>
             </div>
             {lowStock.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nenhum produto com estoque baixo.</p>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2 max-h-[340px] overflow-auto pr-1">
                 {lowStock.map((p) => (
                   <div key={p.id} className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground truncate mr-3">{p.name}</span>

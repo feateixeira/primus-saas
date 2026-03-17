@@ -117,7 +117,10 @@ export default function Estoque() {
     }
 
     toast.success(`Estoque ${showMovement.type === "entrada" ? "adicionado" : showMovement.type === "saida" ? "removido" : "ajustado"}`);
-    setShowMovement(null); setQuantity(0); setReason("");
+    await loadProducts();
+    setShowMovement(null);
+    setQuantity(0);
+    setReason("");
   };
 
   return (

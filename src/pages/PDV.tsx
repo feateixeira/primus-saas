@@ -21,6 +21,7 @@ export default function PDV() {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [showPayment, setShowPayment] = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(true);
+  const [primaryMethod, setPrimaryMethod] = useState<Payment["method"]>("dinheiro");
   const searchRef = useRef<HTMLInputElement>(null);
 
   const filteredProducts = useMemo(
@@ -31,6 +32,11 @@ export default function PDV() {
           p.barcode.includes(searchTerm)
       ),
     [products, searchTerm]
+  );
+
+  const visibleProducts = useMemo(
+    () => (searchTerm.trim() ? filteredProducts : products),
+    [filteredProducts, products, searchTerm]
   );
 
   const loadProducts = async () => {
@@ -70,7 +76,7 @@ export default function PDV() {
   const subtotal = cart.reduce((a, i) => a + i.total, 0);
   const discountAmount = discountType === "percent" ? subtotal * (discount / 100) : discount;
   const total = Math.max(0, subtotal - discountAmount);
-  const paid = payments.reduce((a, p) => a + p.amount, 0);
+  const paid = showPayment ? payments.reduce((a, p) => a + p.amount, 0) : total;
   const remaining = Math.max(0, total - paid);
 
   useEffect(() => {
@@ -86,7 +92,7 @@ export default function PDV() {
       .subscribe();
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "F2") { e.preventDefault(); if (cart.length > 0) setShowPayment(true); }
+      if (e.key === "F9") { e.preventDefault(); if (cart.length > 0) setShowPayment(true); }
       if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); searchRef.current?.focus(); }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -157,9 +163,11 @@ export default function PDV() {
       unit_price: i.unitPrice,
     }));
 
-    const paymentsPayload = payments
-      .filter((p) => p.amount > 0)
-      .map((p) => ({ method: p.method, amount: p.amount }));
+    const paymentsPayload = showPayment
+      ? payments
+          .filter((p) => p.amount > 0)
+          .map((p) => ({ method: p.method, amount: p.amount }))
+      : [{ method: primaryMethod, amount: total }];
 
     const discountValue = discountType === "percent" ? subtotal * (discount / 100) : discount;
 
@@ -186,21 +194,36 @@ export default function PDV() {
 
   return (
     <div className="flex h-[calc(100vh-3rem)] overflow-hidden">
-      <div className="flex-1 flex flex-col min-w-0 border-r border-border lg:w-[70%]">
+      <div className="flex-1 flex flex-col min-w-0 border-r border-border lg:w-[60%]">
         <div className="p-4 border-b border-border">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <input ref={searchRef} type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Buscar produto ou código de barras... (Ctrl+K)" className="w-full h-10 pl-10 pr-4 rounded-lg bg-muted border-none text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-fast" autoFocus />
+            <input
+              ref={searchRef}
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  const code = searchTerm.trim();
+                  if (!code) return;
+                  const product = products.find((p) => p.barcode === code);
+                  if (product) {
+                    addToCart(product);
+                  } else {
+                    toast.error("Produto não encontrado pelo código de barras");
+                  }
+                }
+              }}
+              placeholder="Buscar produto ou código de barras... (Ctrl+K)"
+              className="w-full h-10 pl-10 pr-4 rounded-lg bg-muted border-none text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary transition-fast"
+              autoFocus
+            />
           </div>
         </div>
         <div className="flex-1 overflow-auto p-4">
-          {!searchTerm.trim() ? (
-            <div className="flex items-center justify-center h-full">
-              <p className="text-sm text-muted-foreground">
-                Digite o nome ou código de barras para buscar um produto.
-              </p>
-            </div>
-          ) : filteredProducts.length === 0 ? (
+          {visibleProducts.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <p className="text-sm text-muted-foreground">
                 {products.length === 0
@@ -209,8 +232,8 @@ export default function PDV() {
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-              {filteredProducts.map((product) => (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              {visibleProducts.map((product) => (
                 <motion.button
                   key={product.id}
                   whileTap={{ scale: 0.97 }}
@@ -246,7 +269,7 @@ export default function PDV() {
         </div>
       </div>
 
-      <div className="w-full lg:w-[30%] max-w-md flex flex-col bg-card">
+      <div className="w-full lg:w-[40%] max-w-xl flex flex-col bg-card">
         <div className="p-4 border-b border-border">
           <h2 className="text-sm font-semibold text-foreground">Carrinho</h2>
           <span className="text-xs text-muted-foreground">{cart.length} {cart.length === 1 ? "item" : "itens"}</span>
@@ -295,6 +318,22 @@ export default function PDV() {
               <span className={`display-total font-mono-tabular text-foreground ${remaining <= 0.01 && cart.length > 0 ? "glow-primary text-primary" : ""}`}>R$ {total.toFixed(2)}</span>
             </div>
           </div>
+          {!showPayment && (
+            <div className="flex items-center justify-between pt-2 border-t border-border">
+              <span className="text-xs text-muted-foreground">Forma de pagamento</span>
+              <select
+                value={primaryMethod}
+                onChange={(e) => setPrimaryMethod(e.target.value as Payment["method"])}
+                className="h-8 px-2 rounded-md bg-muted text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                {paymentMethods.map((pm) => (
+                  <option key={pm.key} value={pm.key}>
+                    {pm.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           {showPayment ? (
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3 pt-2">
               <div className="flex items-center justify-between">
@@ -314,10 +353,35 @@ export default function PDV() {
                 <span className="text-muted-foreground">Restante</span>
                 <motion.span layout className={`font-mono-tabular font-semibold ${remaining <= 0.01 ? "text-success" : "text-foreground"}`}>R$ {remaining.toFixed(2)}</motion.span>
               </div>
-            <button onClick={finalizeSaleDb} disabled={remaining > 0.01} className={`w-full h-11 rounded-lg text-sm font-semibold transition-fast ${remaining <= 0.01 ? "bg-primary text-primary-foreground hover:opacity-90 active:scale-[0.98]" : "bg-muted text-muted-foreground cursor-not-allowed"}`}>Finalizar Venda (Enter)</button>
+              <button
+                onClick={finalizeSaleDb}
+                disabled={remaining > 0.01}
+                className={`w-full h-11 rounded-lg text-sm font-semibold transition-fast ${
+                  remaining <= 0.01
+                    ? "bg-primary text-primary-foreground hover:opacity-90 active:scale-[0.98]"
+                    : "bg-muted text-muted-foreground cursor-not-allowed"
+                }`}
+              >
+                Finalizar Venda
+              </button>
             </motion.div>
           ) : (
-            <button onClick={() => cart.length > 0 && setShowPayment(true)} disabled={cart.length === 0} className={`w-full h-11 rounded-lg text-sm font-semibold transition-fast ${cart.length > 0 ? "bg-primary text-primary-foreground hover:opacity-90 active:scale-[0.98]" : "bg-muted text-muted-foreground cursor-not-allowed"}`}>Pagamento (F2)</button>
+            <div className="space-y-2 pt-2 border-t border-border">
+              <button
+                onClick={finalizeSaleDb}
+                disabled={cart.length === 0}
+                className={`w-full h-11 rounded-lg text-sm font-semibold transition-fast ${
+                  cart.length > 0
+                    ? "bg-primary text-primary-foreground hover:opacity-90 active:scale-[0.98]"
+                    : "bg-muted text-muted-foreground cursor-not-allowed"
+                }`}
+              >
+                Finalizar Venda
+              </button>
+              <p className="text-[10px] text-muted-foreground text-right">
+                F9 para pagamento múltiplo
+              </p>
+            </div>
           )}
         </div>
       </div>

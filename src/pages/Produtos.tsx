@@ -128,6 +128,25 @@ export default function Produtos() {
   };
 
   const remove = async (id: string) => {
+    // Remove dependências (itens de venda e movimentações de estoque) antes de remover o produto
+    const { error: saleItemsError } = await supabase
+      .from("sale_items")
+      .delete()
+      .eq("product_id", id);
+    if (saleItemsError) {
+      toast.error("Erro ao remover itens de venda do produto");
+      return;
+    }
+
+    const { error: stockMovementsError } = await supabase
+      .from("stock_movements")
+      .delete()
+      .eq("product_id", id);
+    if (stockMovementsError) {
+      toast.error("Erro ao remover movimentações de estoque do produto");
+      return;
+    }
+
     const { error } = await supabase.from("products").delete().eq("id", id);
     if (error) {
       toast.error("Erro ao remover produto");
