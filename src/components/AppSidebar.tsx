@@ -1,6 +1,6 @@
 import { 
   LayoutDashboard, ShoppingCart, Package, Warehouse, 
-  DollarSign, Users, Truck, BarChart3, Settings, LogOut 
+  DollarSign, Users, Truck, BarChart3, Receipt, Settings, LogOut 
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useAuth } from "@/contexts/AuthContext";
@@ -16,6 +16,7 @@ const allNavItems = [
   { title: "Produtos", url: "/produtos", icon: Package, adminOnly: true },
   { title: "Estoque", url: "/estoque", icon: Warehouse, adminOnly: true },
   { title: "Caixa", url: "/caixa", icon: DollarSign, adminOnly: true },
+  { title: "Vendas", url: "/vendas", icon: Receipt, adminOnly: true },
   { title: "Clientes", url: "/clientes", icon: Users, adminOnly: true },
   { title: "Fornecedores", url: "/fornecedores", icon: Truck, adminOnly: true },
   { title: "Relatórios", url: "/relatorios", icon: BarChart3, adminOnly: true },

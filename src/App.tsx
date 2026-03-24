@@ -14,6 +14,7 @@ import Caixa from "./pages/Caixa";
 import Clientes from "./pages/Clientes";
 import Fornecedores from "./pages/Fornecedores";
 import Relatorios from "./pages/Relatorios";
+import Vendas from "./pages/Vendas";
 import Configuracoes from "./pages/Configuracoes";
 import NotFound from "./pages/NotFound";
 
@@ -48,6 +49,7 @@ function ProtectedRoutes() {
             <Route path="/clientes" element={<Clientes />} />
             <Route path="/fornecedores" element={<Fornecedores />} />
             <Route path="/relatorios" element={<Relatorios />} />
+            <Route path="/vendas" element={<Vendas />} />
             <Route path="/configuracoes" element={<Configuracoes />} />
           </>
         )}
