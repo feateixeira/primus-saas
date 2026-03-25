@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 type Period = "hoje" | "semana" | "mes";
@@ -23,7 +23,7 @@ export default function Relatorios() {
     return { start, end: new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000) };
   }, [period]);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setLoading(true);
     const start = range.start.toISOString();
     const end = range.end.toISOString();
@@ -53,22 +53,22 @@ export default function Relatorios() {
 
     setSummary({ revenue, salesCount, profit });
     setLoading(false);
-  };
+  }, [range.end, range.start]);
 
   useEffect(() => {
     refresh();
 
     const channel = supabase
       .channel("realtime:reports")
-      .on("postgres_changes", { event: "*", schema: "public", table: "sales" }, () => refresh())
-      .on("postgres_changes", { event: "*", schema: "public", table: "sale_items" }, () => refresh())
+      .on("postgres_changes", { event: "*", schema: "public", table: "sales" }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "sale_items" }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "cash_movements" }, refresh)
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period]);
+  }, [period, refresh]);
 
   return (
     <div className="p-6 max-w-7xl mx-auto">

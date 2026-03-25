@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { DollarSign, ShoppingCart, TrendingUp, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -17,7 +17,7 @@ export default function Dashboard() {
   const [lowStock, setLowStock] = useState<{ id: string; name: string; stock: number; minStock: number }[]>([]);
   const [topProducts, setTopProducts] = useState<{ name: string; qty: number }[]>([]);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setLoading(true);
     const today = new Date();
     const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
@@ -70,23 +70,23 @@ export default function Dashboard() {
     setLowStock(low);
     setTopProducts(top);
     setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
     refresh();
 
     const channel = supabase
       .channel("realtime:dashboard")
-      .on("postgres_changes", { event: "*", schema: "public", table: "sales" }, () => refresh())
-      .on("postgres_changes", { event: "*", schema: "public", table: "sale_items" }, () => refresh())
-      .on("postgres_changes", { event: "*", schema: "public", table: "products" }, () => refresh())
+      .on("postgres_changes", { event: "*", schema: "public", table: "sales" }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "sale_items" }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "cash_movements" }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "products" }, refresh)
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refresh]);
 
   const kpis = useMemo(
     () => [
