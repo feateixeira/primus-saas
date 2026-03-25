@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Calendar, Filter, Receipt } from "lucide-react";
+import { Calendar, Filter, Pencil, Receipt, Save, Trash2, X } from "lucide-react";
 
 type PaymentMethodKey = "dinheiro" | "pix" | "debito" | "credito" | "todos";
 
@@ -20,6 +20,8 @@ interface SalePayment {
 interface SaleDisplay {
   id: string;
   date: string;
+  subtotal: number;
+  discount: number;
   total: number;
   cashRegisterId: string | null;
   payments: SalePayment[];
@@ -48,6 +50,26 @@ export default function Vendas() {
   });
   const [cashRegisterFilter, setCashRegisterFilter] = useState<string>("todos");
   const [methodFilter, setMethodFilter] = useState<PaymentMethodKey>("todos");
+  const [editMode, setEditMode] = useState(false);
+  const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
+  const [editDiscount, setEditDiscount] = useState(0);
+  const [editTotal, setEditTotal] = useState(0);
+  const [editPayments, setEditPayments] = useState<Record<Exclude<PaymentMethodKey, "todos">, number>>({
+    dinheiro: 0,
+    pix: 0,
+    debito: 0,
+    credito: 0,
+  });
+  const [savingSale, setSavingSale] = useState(false);
+
+  const toggleEditMode = useCallback(() => {
+    setEditMode((prev) => {
+      const next = !prev;
+      if (!next) setEditingSaleId(null);
+      toast(next ? "Modo de edição habilitado" : "Modo de edição desabilitado");
+      return next;
+    });
+  }, []);
 
   const loadRegisters = useCallback(async () => {
     const { data } = await supabase
@@ -64,7 +86,7 @@ export default function Vendas() {
 
     let q = supabase
       .from("sales")
-      .select("id, date, total, cash_register_id, status")
+      .select("id, date, subtotal, discount, total, cash_register_id, status")
       .eq("status", "completed")
       .gte("date", from.toISOString())
       .lt("date", to.toISOString())
@@ -117,6 +139,8 @@ export default function Vendas() {
     const mapped: SaleDisplay[] = list.map((s) => ({
       id: s.id,
       date: s.date,
+      subtotal: Number(s.subtotal ?? 0),
+      discount: Number(s.discount ?? 0),
       total: Number(s.total ?? 0),
       cashRegisterId: s.cash_register_id,
       payments: bySale.get(s.id) ?? [],
@@ -145,6 +169,19 @@ export default function Vendas() {
     };
   }, [loadSales]);
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const isF8 = e.key === "F8" || e.code === "F8" || e.keyCode === 119;
+      if (isF8) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleEditMode();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [toggleEditMode]);
+
   const totalsByMethod = useMemo(() => {
     const acc: Record<string, number> = {
       dinheiro: 0,
@@ -165,9 +202,7 @@ export default function Vendas() {
 
   const filteredSales = useMemo(() => {
     if (methodFilter === "todos") return sales;
-    return sales.filter((s) =>
-      s.payments.some((p) => p.method === methodFilter && p.amount > 0)
-    );
+    return sales.filter((s) => s.payments.some((p) => p.method === methodFilter && p.amount > 0));
   }, [sales, methodFilter]);
 
   const totalLista = useMemo(
@@ -180,6 +215,73 @@ export default function Vendas() {
     const d = startOfDay(t).toISOString().slice(0, 10);
     setDateFrom(d);
     setDateTo(d);
+  };
+
+  const startEditSale = (sale: SaleDisplay) => {
+    setEditingSaleId(sale.id);
+    setEditDiscount(sale.discount);
+    setEditTotal(sale.total);
+    const byMethod: Record<Exclude<PaymentMethodKey, "todos">, number> = {
+      dinheiro: 0,
+      pix: 0,
+      debito: 0,
+      credito: 0,
+    };
+    for (const p of sale.payments) {
+      const method = p.method as Exclude<PaymentMethodKey, "todos">;
+      if (method in byMethod) byMethod[method] += p.amount;
+    }
+    setEditPayments(byMethod);
+  };
+
+  const resetEdit = () => {
+    setEditingSaleId(null);
+    setSavingSale(false);
+  };
+
+  const saveSaleChanges = async () => {
+    if (!editingSaleId || savingSale) return;
+    setSavingSale(true);
+
+    const paymentsPayload = (Object.keys(METHOD_LABELS) as Exclude<PaymentMethodKey, "todos">[])
+      .map((k) => ({ method: k, amount: Number(editPayments[k] ?? 0) }))
+      .filter((p) => p.amount > 0);
+
+    const { error } = await supabase.rpc("update_sale_manual", {
+      _sale_id: editingSaleId,
+      _discount: Number(editDiscount || 0),
+      _total: Number(editTotal || 0),
+      _payments: paymentsPayload,
+    });
+
+    if (error) {
+      toast.error("Erro ao salvar venda", { description: error.message });
+      setSavingSale(false);
+      return;
+    }
+
+    toast.success("Venda atualizada");
+    resetEdit();
+    await loadSales();
+  };
+
+  const cancelSale = async (saleId: string) => {
+    if (savingSale) return;
+    const confirmed = window.confirm("Deseja realmente excluir/cancelar esta venda? O estoque será devolvido.");
+    if (!confirmed) return;
+
+    setSavingSale(true);
+    const { error } = await supabase.rpc("cancel_sale_manual", { _sale_id: saleId });
+
+    if (error) {
+      toast.error("Erro ao cancelar venda", { description: error.message });
+      setSavingSale(false);
+      return;
+    }
+
+    toast.success("Venda cancelada com sucesso");
+    resetEdit();
+    await loadSales();
   };
 
   return (
@@ -287,11 +389,12 @@ export default function Vendas() {
 
       <div className="bg-card rounded-xl shadow-card overflow-hidden">
         <div className="px-4 py-3 border-b border-border">
-          <h2 className="text-sm font-semibold text-foreground">
-            Lista de vendas ({filteredSales.length})
-          </h2>
+          <h2 className="text-sm font-semibold text-foreground">Lista de vendas ({filteredSales.length})</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
             Valores por método vêm dos lançamentos de caixa vinculados à venda.
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Atalho: F8 para habilitar/desabilitar edição.
           </p>
         </div>
         <div className="overflow-x-auto max-h-[min(60vh,560px)] overflow-y-auto">
@@ -303,54 +406,153 @@ export default function Vendas() {
                 <th className="text-right px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Total</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Pagamentos</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Caixa</th>
+                {editMode && (
+                  <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground uppercase">Ações</th>
+                )}
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={editMode ? 6 : 5} className="px-4 py-8 text-center text-muted-foreground">
                     Carregando…
                   </td>
                 </tr>
               ) : filteredSales.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={editMode ? 6 : 5} className="px-4 py-8 text-center text-muted-foreground">
                     Nenhuma venda no período/filtro selecionado.
                   </td>
                 </tr>
               ) : (
                 filteredSales.map((s) => (
-                  <tr key={s.id} className="border-b border-border hover:bg-muted/40">
-                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                      {new Date(s.date).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 font-mono-tabular text-xs text-muted-foreground">
-                      {s.id.slice(0, 8)}…
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono-tabular font-medium">
-                      R$ {s.total.toFixed(2)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {s.payments.length === 0 ? (
-                        <span className="text-xs text-warning">Sem lançamento de pagamento</span>
-                      ) : (
-                        <div className="flex flex-wrap gap-1.5">
-                          {s.payments.map((p, i) => (
-                            <span
-                              key={`${s.id}-${i}`}
-                              className="text-[11px] px-2 py-0.5 rounded-md bg-muted font-mono-tabular"
+                  <Fragment key={s.id}>
+                    <tr className="border-b border-border hover:bg-muted/40">
+                      <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                        {new Date(s.date).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 font-mono-tabular text-xs text-muted-foreground">
+                        {s.id.slice(0, 8)}…
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono-tabular font-medium">
+                        R$ {s.total.toFixed(2)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {s.payments.length === 0 ? (
+                          <span className="text-xs text-warning">Sem lançamento de pagamento</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1.5">
+                            {s.payments.map((p, i) => (
+                              <span
+                                key={`${s.id}-${i}`}
+                                className="text-[11px] px-2 py-0.5 rounded-md bg-muted font-mono-tabular"
+                              >
+                                {METHOD_LABELS[p.method as Exclude<PaymentMethodKey, "todos">] ?? p.method}: R${" "}
+                                {p.amount.toFixed(2)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-xs font-mono-tabular text-muted-foreground">
+                        {s.cashRegisterId ? s.cashRegisterId.slice(0, 8) + "…" : "—"}
+                      </td>
+                      {editMode && (
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => startEditSale(s)}
+                              className="h-8 px-3 rounded-md border border-border text-xs hover:bg-muted transition-fast inline-flex items-center gap-1.5"
                             >
-                              {METHOD_LABELS[p.method as Exclude<PaymentMethodKey, "todos">] ?? p.method}: R${" "}
-                              {p.amount.toFixed(2)}
-                            </span>
-                          ))}
-                        </div>
+                              <Pencil className="h-3.5 w-3.5" />
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => cancelSale(s.id)}
+                              className="h-8 px-3 rounded-md border border-destructive/30 text-destructive text-xs hover:bg-destructive/10 transition-fast inline-flex items-center gap-1.5"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Excluir
+                            </button>
+                          </div>
+                        </td>
                       )}
-                    </td>
-                    <td className="px-4 py-3 text-xs font-mono-tabular text-muted-foreground">
-                      {s.cashRegisterId ? s.cashRegisterId.slice(0, 8) + "…" : "—"}
-                    </td>
-                  </tr>
+                    </tr>
+                    {editMode && editingSaleId === s.id && (
+                      <tr className="border-b border-border bg-muted/30">
+                        <td colSpan={6} className="px-4 py-3">
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div>
+                              <label className="text-xs text-muted-foreground mb-1 block">Subtotal</label>
+                              <input
+                                value={s.subtotal.toFixed(2)}
+                                readOnly
+                                className="w-full h-9 px-3 rounded-md bg-muted text-sm text-foreground"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs text-muted-foreground mb-1 block">Desconto</label>
+                              <input
+                                type="number"
+                                value={editDiscount}
+                                onChange={(e) => setEditDiscount(Number(e.target.value || 0))}
+                                className="w-full h-9 px-3 rounded-md bg-card text-sm text-foreground"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-xs text-muted-foreground mb-1 block">Total</label>
+                              <input
+                                type="number"
+                                value={editTotal}
+                                onChange={(e) => setEditTotal(Number(e.target.value || 0))}
+                                className="w-full h-9 px-3 rounded-md bg-card text-sm text-foreground"
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-3">
+                            {(Object.keys(METHOD_LABELS) as Exclude<PaymentMethodKey, "todos">[]).map((k) => (
+                              <div key={k}>
+                                <label className="text-xs text-muted-foreground mb-1 block">{METHOD_LABELS[k]}</label>
+                                <input
+                                  type="number"
+                                  value={editPayments[k]}
+                                  onChange={(e) =>
+                                    setEditPayments((prev) => ({ ...prev, [k]: Number(e.target.value || 0) }))
+                                  }
+                                  className="w-full h-9 px-3 rounded-md bg-card text-sm text-foreground"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                          <div className="flex items-center justify-end gap-2 mt-3">
+                            <button
+                              type="button"
+                              onClick={resetEdit}
+                              className="h-9 px-4 rounded-md border border-border text-sm hover:bg-muted transition-fast inline-flex items-center gap-1.5"
+                            >
+                              <X className="h-4 w-4" />
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={saveSaleChanges}
+                              disabled={savingSale}
+                              className={`h-9 px-4 rounded-md text-sm inline-flex items-center gap-1.5 transition-fast ${
+                                savingSale
+                                  ? "bg-muted text-muted-foreground cursor-not-allowed"
+                                  : "bg-primary text-primary-foreground hover:opacity-90"
+                              }`}
+                            >
+                              <Save className="h-4 w-4" />
+                              {savingSale ? "Salvando..." : "Salvar alterações"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))
               )}
             </tbody>

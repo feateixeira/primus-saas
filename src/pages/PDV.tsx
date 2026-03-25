@@ -22,6 +22,7 @@ export default function PDV() {
   const [showPayment, setShowPayment] = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [primaryMethod, setPrimaryMethod] = useState<Payment["method"]>("dinheiro");
+  const [isFinalizing, setIsFinalizing] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const filteredProducts = useMemo(
@@ -139,23 +140,26 @@ export default function PDV() {
   };
 
   const finalizeSaleDb = async () => {
+    if (isFinalizing) return;
     if (remaining > 0.01) {
       toast.error("Valor insuficiente. Faltam R$ " + remaining.toFixed(2));
       return;
     }
 
-    const { data: cash } = await supabase
-      .from("cash_registers")
-      .select("id")
-      .eq("status", "open")
-      .order("opened_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    setIsFinalizing(true);
+    try {
+      const { data: cash } = await supabase
+        .from("cash_registers")
+        .select("id")
+        .eq("status", "open")
+        .order("opened_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    if (!cash?.id) {
-      toast.error("Caixa fechado. Abra o caixa antes de vender.");
-      return;
-    }
+      if (!cash?.id) {
+        toast.error("Caixa fechado. Abra o caixa antes de vender.");
+        return;
+      }
 
     const itemsPayload = cart.map((i) => ({
       product_id: i.productId,
@@ -171,25 +175,28 @@ export default function PDV() {
 
     const discountValue = discountType === "percent" ? subtotal * (discount / 100) : discount;
 
-    const { data, error } = await supabase.rpc("create_sale", {
-      _items: itemsPayload,
-      _discount: discountValue,
-      _payments: paymentsPayload,
-      _cash_register_id: cash.id,
-      _client_id: null,
-    });
+      const { data, error } = await supabase.rpc("create_sale", {
+        _items: itemsPayload,
+        _discount: discountValue,
+        _payments: paymentsPayload,
+        _cash_register_id: cash.id,
+        _client_id: null,
+      });
 
-    if (error) {
-      toast.error("Erro ao finalizar venda", { description: error.message });
-      return;
+      if (error) {
+        toast.error("Erro ao finalizar venda", { description: error.message });
+        return;
+      }
+
+      toast.success("Venda Finalizada!", { description: `Venda: ${String(data).slice(0, 8)} | Total: R$ ${total.toFixed(2)}` });
+      setCart([]);
+      setDiscount(0);
+      setPayments([]);
+      setShowPayment(false);
+      searchRef.current?.focus();
+    } finally {
+      setIsFinalizing(false);
     }
-
-    toast.success("Venda Finalizada!", { description: `Venda: ${String(data).slice(0, 8)} | Total: R$ ${total.toFixed(2)}` });
-    setCart([]);
-    setDiscount(0);
-    setPayments([]);
-    setShowPayment(false);
-    searchRef.current?.focus();
   };
 
   return (
@@ -355,28 +362,28 @@ export default function PDV() {
               </div>
               <button
                 onClick={finalizeSaleDb}
-                disabled={remaining > 0.01}
+                disabled={remaining > 0.01 || isFinalizing}
                 className={`w-full h-11 rounded-lg text-sm font-semibold transition-fast ${
-                  remaining <= 0.01
+                  remaining <= 0.01 && !isFinalizing
                     ? "bg-primary text-primary-foreground hover:opacity-90 active:scale-[0.98]"
                     : "bg-muted text-muted-foreground cursor-not-allowed"
                 }`}
               >
-                Finalizar Venda
+                {isFinalizing ? "Finalizando..." : "Finalizar Venda"}
               </button>
             </motion.div>
           ) : (
             <div className="space-y-2 pt-2 border-t border-border">
               <button
                 onClick={finalizeSaleDb}
-                disabled={cart.length === 0}
+                disabled={cart.length === 0 || isFinalizing}
                 className={`w-full h-11 rounded-lg text-sm font-semibold transition-fast ${
-                  cart.length > 0
+                  cart.length > 0 && !isFinalizing
                     ? "bg-primary text-primary-foreground hover:opacity-90 active:scale-[0.98]"
                     : "bg-muted text-muted-foreground cursor-not-allowed"
                 }`}
               >
-                Finalizar Venda
+                {isFinalizing ? "Finalizando..." : "Finalizar Venda"}
               </button>
               <p className="text-[10px] text-muted-foreground text-right">
                 F9 para pagamento múltiplo

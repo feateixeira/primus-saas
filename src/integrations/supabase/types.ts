@@ -313,6 +313,12 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      cancel_sale_manual: {
+        Args: {
+          _sale_id: string
+        }
+        Returns: undefined
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
@@ -329,6 +335,15 @@ export type Database = {
           _client_id?: string | null
         }
         Returns: string
+      }
+      update_sale_manual: {
+        Args: {
+          _discount: number
+          _payments: Json
+          _sale_id: string
+          _total?: number | null
+        }
+        Returns: undefined
       }
     }
     Enums: {
