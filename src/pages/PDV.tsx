@@ -4,6 +4,14 @@ import { Search, Plus, Minus, Trash2, X, Percent, DollarSign } from "lucide-reac
 import { CartItem, Payment, Product } from "@/types/models";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const paymentMethods = [
   { key: "dinheiro" as const, label: "Dinheiro", icon: DollarSign },
@@ -23,7 +31,11 @@ export default function PDV() {
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [primaryMethod, setPrimaryMethod] = useState<Payment["method"]>("dinheiro");
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [cashModalOpen, setCashModalOpen] = useState(false);
+  const [cashReceivedInput, setCashReceivedInput] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const cashReceivedRef = useRef<HTMLInputElement>(null);
+  const cashReceivedSnapshotRef = useRef<number | null>(null);
 
   const filteredProducts = useMemo(
     () =>
@@ -80,6 +92,31 @@ export default function PDV() {
   const paid = showPayment ? payments.reduce((a, p) => a + p.amount, 0) : total;
   const remaining = Math.max(0, total - paid);
 
+  const positivePayments = useMemo(() => payments.filter((p) => p.amount > 0), [payments]);
+  const isDinheiroOnlyCheckout =
+    (!showPayment && primaryMethod === "dinheiro") ||
+    (showPayment &&
+      positivePayments.length > 0 &&
+      positivePayments.every((p) => p.method === "dinheiro"));
+
+  const parseMoneyLocal = (raw: string) => {
+    const t = raw.trim();
+    if (!t) return 0;
+    if (t.includes(",") && t.includes(".")) {
+      const n = parseFloat(t.replace(/\./g, "").replace(",", "."));
+      return Number.isFinite(n) ? n : 0;
+    }
+    if (t.includes(",")) {
+      const n = parseFloat(t.replace(",", "."));
+      return Number.isFinite(n) ? n : 0;
+    }
+    const n = parseFloat(t);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const cashReceivedValue = parseMoneyLocal(cashReceivedInput);
+  const cashChangePreview = Math.max(0, cashReceivedValue - total);
+
   useEffect(() => {
     loadProducts();
 
@@ -134,9 +171,42 @@ export default function PDV() {
     });
   };
 
-  const finalizeSale = () => {
-    if (remaining > 0.01) { toast.error("Valor insuficiente. Faltam R$ " + remaining.toFixed(2)); return; }
-    // placeholder: replaced below
+  const buildPaymentsPayload = (): { method: Payment["method"]; amount: number }[] => {
+    if (!showPayment) {
+      return [{ method: primaryMethod, amount: total }];
+    }
+    if (positivePayments.length > 0 && positivePayments.every((p) => p.method === "dinheiro")) {
+      return [{ method: "dinheiro", amount: total }];
+    }
+    return positivePayments.map((p) => ({ method: p.method, amount: p.amount }));
+  };
+
+  const requestFinalize = () => {
+    if (cart.length === 0 || isFinalizing) return;
+    if (showPayment && remaining > 0.01) {
+      toast.error("Valor insuficiente. Faltam R$ " + remaining.toFixed(2));
+      return;
+    }
+    if (isDinheiroOnlyCheckout) {
+      setCashReceivedInput("");
+      setCashModalOpen(true);
+      queueMicrotask(() => cashReceivedRef.current?.focus());
+      return;
+    }
+    void finalizeSaleDb();
+  };
+
+  const confirmCashAndFinalize = () => {
+    if (cashReceivedValue + 0.005 < total) {
+      toast.error("Valor recebido insuficiente", {
+        description: `Falta R$ ${Math.max(0, total - cashReceivedValue).toFixed(2)} para cobrir o total.`,
+      });
+      return;
+    }
+    cashReceivedSnapshotRef.current = cashReceivedValue;
+    setCashModalOpen(false);
+    setCashReceivedInput("");
+    void finalizeSaleDb();
   };
 
   const finalizeSaleDb = async () => {
@@ -157,6 +227,7 @@ export default function PDV() {
         .maybeSingle();
 
       if (!cash?.id) {
+        cashReceivedSnapshotRef.current = null;
         toast.error("Caixa fechado. Abra o caixa antes de vender.");
         return;
       }
@@ -167,11 +238,7 @@ export default function PDV() {
       unit_price: i.unitPrice,
     }));
 
-    const paymentsPayload = showPayment
-      ? payments
-          .filter((p) => p.amount > 0)
-          .map((p) => ({ method: p.method, amount: p.amount }))
-      : [{ method: primaryMethod, amount: total }];
+    const paymentsPayload = buildPaymentsPayload();
 
     const discountValue = discountType === "percent" ? subtotal * (discount / 100) : discount;
 
@@ -184,11 +251,21 @@ export default function PDV() {
       });
 
       if (error) {
+        cashReceivedSnapshotRef.current = null;
         toast.error("Erro ao finalizar venda", { description: error.message });
         return;
       }
 
-      toast.success("Venda Finalizada!", { description: `Venda: ${String(data).slice(0, 8)} | Total: R$ ${total.toFixed(2)}` });
+      const receivedSnap = cashReceivedSnapshotRef.current;
+      cashReceivedSnapshotRef.current = null;
+      const change =
+        receivedSnap != null && receivedSnap > total + 0.005 ? receivedSnap - total : 0;
+      const successDescription =
+        change > 0.005
+          ? `Venda: ${String(data).slice(0, 8)} | Total: R$ ${total.toFixed(2)} | Troco: R$ ${change.toFixed(2)}`
+          : `Venda: ${String(data).slice(0, 8)} | Total: R$ ${total.toFixed(2)}`;
+
+      toast.success("Venda Finalizada!", { description: successDescription });
       setCart([]);
       setDiscount(0);
       setPayments([]);
@@ -200,6 +277,84 @@ export default function PDV() {
   };
 
   return (
+    <>
+    <Dialog
+      open={cashModalOpen}
+      onOpenChange={(open) => {
+        setCashModalOpen(open);
+        if (!open) setCashReceivedInput("");
+      }}
+    >
+      <DialogContent className="sm:max-w-md" onOpenAutoFocus={(e) => e.preventDefault()}>
+        <DialogHeader>
+          <DialogTitle>Pagamento em dinheiro</DialogTitle>
+          <DialogDescription>
+            Informe quanto o cliente entregou. O troco é calculado em relação ao total da venda.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Total da venda</span>
+            <span className="font-mono-tabular font-semibold text-foreground">R$ {total.toFixed(2)}</span>
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="pdv-cash-received" className="text-xs font-medium text-foreground">
+              Valor recebido
+            </label>
+            <input
+              id="pdv-cash-received"
+              ref={cashReceivedRef}
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
+              value={cashReceivedInput}
+              onChange={(e) => setCashReceivedInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  confirmCashAndFinalize();
+                }
+              }}
+              placeholder="0,00"
+              className="h-10 w-full px-3 rounded-md bg-muted text-base font-mono-tabular text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+          <div className="flex justify-between items-center rounded-lg bg-muted/60 px-3 py-2.5">
+            <span className="text-sm text-muted-foreground">Troco</span>
+            <span
+              className={`font-mono-tabular text-lg font-semibold ${
+                cashReceivedValue + 0.005 < total
+                  ? "text-muted-foreground"
+                  : "text-primary"
+              }`}
+            >
+              {cashReceivedInput.trim() === ""
+                ? "R$ 0,00"
+                : cashReceivedValue + 0.005 < total
+                  ? "—"
+                  : `R$ ${cashChangePreview.toFixed(2)}`}
+            </span>
+          </div>
+        </div>
+        <DialogFooter className="gap-2 sm:gap-0">
+          <button
+            type="button"
+            onClick={() => setCashModalOpen(false)}
+            className="h-10 rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground hover:bg-accent"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={confirmCashAndFinalize}
+            disabled={cashReceivedInput.trim() === "" || cashReceivedValue + 0.005 < total}
+            className="h-10 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Confirmar venda
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     <div className="flex h-[calc(100vh-3rem)] overflow-hidden">
       <div className="flex-1 flex flex-col min-w-0 border-r border-border lg:w-[60%]">
         <div className="p-4 border-b border-border">
@@ -361,7 +516,7 @@ export default function PDV() {
                 <motion.span layout className={`font-mono-tabular font-semibold ${remaining <= 0.01 ? "text-success" : "text-foreground"}`}>R$ {remaining.toFixed(2)}</motion.span>
               </div>
               <button
-                onClick={finalizeSaleDb}
+                onClick={requestFinalize}
                 disabled={remaining > 0.01 || isFinalizing}
                 className={`w-full h-11 rounded-lg text-sm font-semibold transition-fast ${
                   remaining <= 0.01 && !isFinalizing
@@ -375,7 +530,7 @@ export default function PDV() {
           ) : (
             <div className="space-y-2 pt-2 border-t border-border">
               <button
-                onClick={finalizeSaleDb}
+                onClick={requestFinalize}
                 disabled={cart.length === 0 || isFinalizing}
                 className={`w-full h-11 rounded-lg text-sm font-semibold transition-fast ${
                   cart.length > 0 && !isFinalizing
@@ -393,5 +548,6 @@ export default function PDV() {
         </div>
       </div>
     </div>
+    </>
   );
 }
