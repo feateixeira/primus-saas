@@ -36,6 +36,7 @@ export default function PDV() {
   const searchRef = useRef<HTMLInputElement>(null);
   const cashReceivedRef = useRef<HTMLInputElement>(null);
   const cashReceivedSnapshotRef = useRef<number | null>(null);
+  const cartRef = useRef<CartItem[]>([]);
 
   const filteredProducts = useMemo(
     () =>
@@ -52,7 +53,7 @@ export default function PDV() {
     [filteredProducts, products, searchTerm]
   );
 
-  const loadProducts = async () => {
+  const loadProducts = useCallback(async () => {
     setLoadingProducts(true);
     const { data, error } = await supabase
       .from("products")
@@ -60,7 +61,7 @@ export default function PDV() {
       .order("name", { ascending: true });
 
     if (error) {
-      toast.error("Erro ao carregar produtos");
+      toast.error("Erro ao carregar produtos", { description: error.message });
       setLoadingProducts(false);
       return;
     }
@@ -71,7 +72,7 @@ export default function PDV() {
       return {
         id: r.id,
         name: r.name,
-        barcode: r.barcode ?? "",
+        barcode: String(r.barcode ?? "").trim(),
         category: r.category ?? "",
         brand: r.brand ?? "",
         costPrice,
@@ -84,7 +85,10 @@ export default function PDV() {
     });
     setProducts(mapped);
     setLoadingProducts(false);
-  };
+  }, []);
+
+  const normalizeBarcodeScan = (raw: string) =>
+    raw.replace(/[\r\n\t\u0000]/g, "").trim();
 
   const subtotal = cart.reduce((a, i) => a + i.total, 0);
   const discountAmount = discountType === "percent" ? subtotal * (discount / 100) : discount;
@@ -118,28 +122,60 @@ export default function PDV() {
   const cashChangePreview = Math.max(0, cashReceivedValue - total);
 
   useEffect(() => {
-    loadProducts();
+    cartRef.current = cart;
+  }, [cart]);
+
+  useEffect(() => {
+    void loadProducts();
 
     const channel = supabase
       .channel("realtime:pdv-products")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "products" },
-        () => loadProducts()
+        () => {
+          void loadProducts();
+        }
       )
       .subscribe();
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "F9") { e.preventDefault(); if (cart.length > 0) setShowPayment(true); }
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); searchRef.current?.focus(); }
+      if (e.key === "F9") {
+        e.preventDefault();
+        if (cartRef.current.length > 0) setShowPayment(true);
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void loadProducts();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("visibilitychange", onVisible);
       supabase.removeChannel(channel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cart.length]);
+  }, [loadProducts]);
+
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!session?.user) return;
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
+        void loadProducts();
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [loadProducts]);
 
   const addToCart = useCallback((product: Product) => {
     setCart((prev) => {
@@ -368,7 +404,7 @@ export default function PDV() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  const code = searchTerm.trim();
+                  const code = normalizeBarcodeScan((e.currentTarget as HTMLInputElement).value);
                   if (!code) return;
                   const product = products.find((p) => p.barcode === code);
                   if (product) {
