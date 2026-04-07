@@ -40,16 +40,25 @@ export default function Relatorios() {
     const salesCount = salesList.length;
 
     const saleIds = new Set(salesList.map((s) => s.id));
-    const { data: items } = await supabase
-      .from("sale_items")
-      .select("quantity,unit_price,cost_price,sale_id");
-    const itemsInRange = (items ?? []).filter((it) => saleIds.has(it.sale_id));
-    const profit = itemsInRange.reduce((a, it) => {
+    const saleIdArray = Array.from(saleIds);
+
+    let itemsInRange: any[] = [];
+    if (saleIdArray.length > 0) {
+      const { data: items } = await supabase
+        .from("sale_items")
+        .select("quantity,unit_price,cost_price,sale_id")
+        .in("sale_id", saleIdArray);
+      itemsInRange = items ?? [];
+    }
+
+    const totalCost = itemsInRange.reduce((a, it) => {
       const qty = Number(it.quantity ?? 0);
-      const unit = Number(it.unit_price ?? 0);
       const cost = Number(it.cost_price ?? 0);
-      return a + (unit - cost) * qty;
+      return a + cost * qty;
     }, 0);
+    
+    // Lucro real = Faturamento (vendas com descontos já aplicados) - Custo (soma de todos os produtos vendidos)
+    const profit = revenue - totalCost;
 
     setSummary({ revenue, salesCount, profit });
     setLoading(false);

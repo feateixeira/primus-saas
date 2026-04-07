@@ -90,10 +90,10 @@ export default function PDV() {
   const normalizeBarcodeScan = (raw: string) =>
     raw.replace(/[\r\n\t\u0000]/g, "").trim();
 
-  const subtotal = cart.reduce((a, i) => a + i.total, 0);
-  const discountAmount = discountType === "percent" ? subtotal * (discount / 100) : discount;
+  const subtotal = cart.reduce((a, i) => a + (Number(i.quantity || 0) * Number(i.unitPrice || 0)), 0);
+  const discountAmount = discountType === "percent" ? subtotal * ((Number(discount) || 0) / 100) : (Number(discount) || 0);
   const total = Math.max(0, subtotal - discountAmount);
-  const paid = showPayment ? payments.reduce((a, p) => a + p.amount, 0) : total;
+  const paid = showPayment ? payments.reduce((a, p) => a + (Number(p.amount) || 0), 0) : total;
   const remaining = Math.max(0, total - paid);
 
   const positivePayments = useMemo(() => payments.filter((p) => p.amount > 0), [payments]);
