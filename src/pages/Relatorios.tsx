@@ -28,35 +28,58 @@ export default function Relatorios() {
     const start = range.start.toISOString();
     const end = range.end.toISOString();
 
-    const { data: sales } = await supabase
-      .from("sales")
-      .select("id,total")
-      .eq("status", "completed")
-      .gte("date", start)
-      .lt("date", end);
+    let allSales: any[] = [];
+    let hasMore = true;
+    let offset = 0;
+    const limit = 1000;
 
-    const salesList = (sales ?? []).map((s) => ({ id: s.id, total: Number(s.total ?? 0) }));
-    const revenue = salesList.reduce((a, s) => a + s.total, 0);
-    const salesCount = salesList.length;
+    while (hasMore) {
+      const { data: sales, error } = await supabase
+        .from("sales")
+        .select(`
+          id,
+          total,
+          sale_items (
+            quantity,
+            unit_price,
+            cost_price
+          )
+        `)
+        .eq("status", "completed")
+        .gte("date", start)
+        .lt("date", end)
+        .range(offset, offset + limit - 1);
 
-    const saleIds = new Set(salesList.map((s) => s.id));
-    const saleIdArray = Array.from(saleIds);
+      if (error) {
+        console.error("Erro ao buscar relatório: ", error);
+        break;
+      }
 
-    let itemsInRange: any[] = [];
-    if (saleIdArray.length > 0) {
-      const { data: items } = await supabase
-        .from("sale_items")
-        .select("quantity,unit_price,cost_price,sale_id")
-        .in("sale_id", saleIdArray);
-      itemsInRange = items ?? [];
+      if (sales) {
+        allSales = [...allSales, ...sales];
+        if (sales.length < limit) {
+          hasMore = false;
+        } else {
+          offset += limit;
+        }
+      } else {
+        hasMore = false;
+      }
     }
 
-    const totalCost = itemsInRange.reduce((a, it) => {
-      const qty = Number(it.quantity ?? 0);
-      const cost = Number(it.cost_price ?? 0);
-      return a + cost * qty;
-    }, 0);
-    
+    const revenue = allSales.reduce((a, s) => a + Number(s.total ?? 0), 0);
+    const salesCount = allSales.length;
+
+    let totalCost = 0;
+    allSales.forEach(sale => {
+      const items = sale.sale_items || [];
+      items.forEach((it: any) => {
+        const qty = Number(it.quantity ?? 0);
+        const cost = Number(it.cost_price ?? 0);
+        totalCost += cost * qty;
+      });
+    });
+
     // Lucro real = Faturamento (vendas com descontos já aplicados) - Custo (soma de todos os produtos vendidos)
     const profit = revenue - totalCost;
 
