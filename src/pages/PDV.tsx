@@ -181,16 +181,33 @@ export default function PDV() {
     setCart((prev) => {
       const existing = prev.find((i) => i.productId === product.id);
       if (existing) {
-        return prev.map((i) => i.productId === product.id ? { ...i, quantity: i.quantity + 1, total: (i.quantity + 1) * i.unitPrice } : i);
+        const newQty = existing.quantity + 1;
+        return prev.map((i) =>
+          i.productId === product.id
+            ? { ...i, quantity: newQty, total: newQty * i.unitPrice }
+            : i
+        );
       }
-      return [...prev, { productId: product.id, name: product.name, quantity: 1, unitPrice: product.salePrice, total: product.salePrice }];
+      const unitPrice = Number(product.salePrice) || 0;
+      return [
+        ...prev,
+        { productId: product.id, name: product.name, quantity: 1, unitPrice, total: unitPrice },
+      ];
     });
     setSearchTerm("");
     searchRef.current?.focus();
   }, []);
 
   const updateQuantity = (productId: string, delta: number) => {
-    setCart((prev) => prev.map((i) => i.productId === productId ? { ...i, quantity: Math.max(0, i.quantity + delta), total: Math.max(0, i.quantity + delta) * i.unitPrice } : i).filter((i) => i.quantity > 0));
+    setCart((prev) =>
+      prev
+        .map((i) => {
+          if (i.productId !== productId) return i;
+          const newQty = Math.max(0, i.quantity + delta);
+          return { ...i, quantity: newQty, total: newQty * i.unitPrice };
+        })
+        .filter((i) => i.quantity > 0)
+    );
   };
 
   const removeFromCart = (productId: string) => {
@@ -489,7 +506,7 @@ export default function PDV() {
                       <span className="w-6 text-center text-sm font-mono-tabular font-medium">{cartItem.quantity}</span>
                       <button onClick={() => updateQuantity(cartItem.productId, 1)} className="h-6 w-6 rounded-md bg-muted flex items-center justify-center transition-fast hover:bg-accent"><Plus className="h-3 w-3" /></button>
                     </div>
-                    <span className="font-mono-tabular text-sm font-semibold w-20 text-right">R$ {cartItem.total.toFixed(2)}</span>
+                    <span className="font-mono-tabular text-sm font-semibold w-20 text-right">R$ {(Number(cartItem.total) || 0).toFixed(2)}</span>
                     <button onClick={() => removeFromCart(cartItem.productId)} className="h-6 w-6 rounded-md opacity-0 group-hover:opacity-100 flex items-center justify-center text-destructive transition-fast hover:bg-destructive/10"><Trash2 className="h-3 w-3" /></button>
                   </div>
                 </motion.div>

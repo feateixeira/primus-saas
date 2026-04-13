@@ -20,17 +20,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const fetchRole = async (userId: string) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("user_roles")
       .select("role")
       .eq("user_id", userId)
-      .single();
-    setRole(data?.role as "admin" | "operador" | null);
+      .maybeSingle();
+    if (!error) {
+      setRole((data?.role as "admin" | "operador" | null) ?? "admin");
+    }
   };
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
+      async (event, session) => {
+        // Se a sessão expirou e não pôde ser renovada, limpa o estado
+        if (event === 'TOKEN_REFRESH_FAILED') {
+          setUser(null);
+          setSession(null);
+          setRole(null);
+          setLoading(false);
+          await supabase.auth.signOut();
+          return;
+        }
+
         setSession(session);
         setUser(session?.user ?? null);
         if (session?.user) {
