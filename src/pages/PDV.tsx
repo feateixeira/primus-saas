@@ -20,6 +20,24 @@ const paymentMethods = [
   { key: "credito" as const, label: "Crédito", icon: DollarSign },
 ];
 
+const parseCurrencyValue = (raw: unknown): number => {
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : 0;
+  if (typeof raw !== "string") return 0;
+  const trimmed = raw.trim();
+  if (!trimmed) return 0;
+
+  if (trimmed.includes(",") && trimmed.includes(".")) {
+    const n = Number.parseFloat(trimmed.replace(/\./g, "").replace(",", "."));
+    return Number.isFinite(n) ? n : 0;
+  }
+  if (trimmed.includes(",")) {
+    const n = Number.parseFloat(trimmed.replace(",", "."));
+    return Number.isFinite(n) ? n : 0;
+  }
+  const n = Number.parseFloat(trimmed);
+  return Number.isFinite(n) ? n : 0;
+};
+
 export default function PDV() {
   const [products, setProducts] = useState<Product[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -67,8 +85,8 @@ export default function PDV() {
     }
 
     const mapped: Product[] = (data ?? []).map((r) => {
-      const costPrice = Number(r.cost_price ?? 0);
-      const salePrice = Number(r.sale_price ?? 0);
+      const costPrice = parseCurrencyValue(r.cost_price);
+      const salePrice = parseCurrencyValue(r.sale_price);
       return {
         id: r.id,
         name: r.name,
@@ -90,7 +108,10 @@ export default function PDV() {
   const normalizeBarcodeScan = (raw: string) =>
     raw.replace(/[\r\n\t\u0000]/g, "").trim();
 
-  const subtotal = cart.reduce((a, i) => a + (Number(i.quantity || 0) * Number(i.unitPrice || 0)), 0);
+  const subtotal = cart.reduce(
+    (a, i) => a + parseCurrencyValue(i.quantity) * parseCurrencyValue(i.unitPrice),
+    0
+  );
   const discountAmount = discountType === "percent" ? subtotal * ((Number(discount) || 0) / 100) : (Number(discount) || 0);
   const total = Math.max(0, subtotal - discountAmount);
   const paid = showPayment ? payments.reduce((a, p) => a + (Number(p.amount) || 0), 0) : total;
@@ -103,27 +124,29 @@ export default function PDV() {
       positivePayments.length > 0 &&
       positivePayments.every((p) => p.method === "dinheiro"));
 
-  const parseMoneyLocal = (raw: string) => {
-    const t = raw.trim();
-    if (!t) return 0;
-    if (t.includes(",") && t.includes(".")) {
-      const n = parseFloat(t.replace(/\./g, "").replace(",", "."));
-      return Number.isFinite(n) ? n : 0;
-    }
-    if (t.includes(",")) {
-      const n = parseFloat(t.replace(",", "."));
-      return Number.isFinite(n) ? n : 0;
-    }
-    const n = parseFloat(t);
-    return Number.isFinite(n) ? n : 0;
-  };
-
-  const cashReceivedValue = parseMoneyLocal(cashReceivedInput);
+  const cashReceivedValue = parseCurrencyValue(cashReceivedInput);
   const cashChangePreview = Math.max(0, cashReceivedValue - total);
 
   useEffect(() => {
     cartRef.current = cart;
   }, [cart]);
+
+  useEffect(() => {
+    if (products.length === 0) return;
+    setCart((prev) =>
+      prev.map((item) => {
+        const product = products.find((p) => p.id === item.productId);
+        const fallbackPrice = product ? parseCurrencyValue(product.salePrice) : 0;
+        const normalizedUnitPrice = parseCurrencyValue(item.unitPrice);
+        const safeUnitPrice = normalizedUnitPrice > 0 ? normalizedUnitPrice : fallbackPrice;
+        return {
+          ...item,
+          unitPrice: safeUnitPrice,
+          total: parseCurrencyValue(item.quantity) * safeUnitPrice,
+        };
+      })
+    );
+  }, [products]);
 
   useEffect(() => {
     void loadProducts();
@@ -188,7 +211,7 @@ export default function PDV() {
             : i
         );
       }
-      const unitPrice = Number(product.salePrice) || 0;
+      const unitPrice = parseCurrencyValue(product.salePrice);
       return [
         ...prev,
         { productId: product.id, name: product.name, quantity: 1, unitPrice, total: unitPrice },
@@ -293,7 +316,9 @@ export default function PDV() {
 
     const paymentsPayload = buildPaymentsPayload();
 
-    const discountValue = discountType === "percent" ? subtotal * (discount / 100) : discount;
+      const normalizedDiscount = parseCurrencyValue(discount);
+      const discountValue =
+        discountType === "percent" ? subtotal * (normalizedDiscount / 100) : normalizedDiscount;
 
       const { data, error } = await supabase.rpc("create_sale", {
         _items: itemsPayload,
