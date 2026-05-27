@@ -24,9 +24,9 @@ export default function Login() {
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-8">
           <div className="h-12 w-12 rounded-xl bg-primary flex items-center justify-center mb-4">
-            <span className="text-base font-bold text-primary-foreground tracking-tight">PD</span>
+            <span className="text-base font-bold text-primary-foreground tracking-tight">PC</span>
           </div>
-          <h1 className="text-xl font-semibold text-foreground">PrimusDIstri</h1>
+          <h1 className="text-xl font-semibold text-foreground">Ponto Certo</h1>
           <p className="text-sm text-muted-foreground mt-1">Sistema de Gestão</p>
         </div>
 

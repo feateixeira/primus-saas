@@ -4,7 +4,7 @@ import { toast } from "sonner";
 
 export default function Configuracoes() {
   const [config, setConfig] = useState({
-    name: "PrimusDIstri",
+    name: "Ponto Certo",
     address: "",
     phone: "",
   });

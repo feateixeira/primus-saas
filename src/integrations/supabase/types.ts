@@ -319,6 +319,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      get_open_cash_register_id: {
+        Args: Record<PropertyKey, never>
+        Returns: string
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]

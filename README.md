@@ -1,4 +1,4 @@
-# PrimusDIstri
+# Ponto Certo
 
 Sistema de gestão e PDV para distribuidoras de bebidas, construído com:
 

@@ -55,6 +55,10 @@ export default function PDV() {
   const cashReceivedRef = useRef<HTMLInputElement>(null);
   const cashReceivedSnapshotRef = useRef<number | null>(null);
   const cartRef = useRef<CartItem[]>([]);
+  const scanBufferRef = useRef("");
+  const scanLastAtRef = useRef<number | null>(null);
+  const addToCartRef = useRef<((product: Product) => void) | null>(null);
+  const productsRef = useRef<Product[]>([]);
 
   const filteredProducts = useMemo(
     () =>
@@ -108,6 +112,15 @@ export default function PDV() {
   const normalizeBarcodeScan = (raw: string) =>
     raw.replace(/[\r\n\t\u0000]/g, "").trim();
 
+  const findProductByBarcode = useCallback(
+    (raw: string): Product | undefined => {
+      const code = normalizeBarcodeScan(raw);
+      if (!code) return undefined;
+      return productsRef.current.find((p) => p.barcode === code);
+    },
+    []
+  );
+
   const subtotal = cart.reduce(
     (a, i) => a + parseCurrencyValue(i.quantity) * parseCurrencyValue(i.unitPrice),
     0
@@ -130,6 +143,10 @@ export default function PDV() {
   useEffect(() => {
     cartRef.current = cart;
   }, [cart]);
+
+  useEffect(() => {
+    productsRef.current = products;
+  }, [products]);
 
   useEffect(() => {
     if (products.length === 0) return;
@@ -162,6 +179,34 @@ export default function PDV() {
       )
       .subscribe();
 
+    const shouldCaptureGlobalScan = (): boolean => {
+      if (cashModalOpen) return false;
+      const el = document.activeElement;
+      if (!el) return true;
+      const tag = el.tagName?.toLowerCase();
+      if (tag === "textarea" || tag === "select") return false;
+      if (tag !== "input") return true;
+      const input = el as HTMLInputElement;
+      const type = (input.type || "").toLowerCase();
+      // Permite capturar mesmo quando o foco está em outro lugar,
+      // mas evita “roubar” a digitação em inputs comuns.
+      if (type === "text" || type === "search" || type === "number" || type === "tel" || type === "email" || type === "password") {
+        return el === searchRef.current;
+      }
+      return el === searchRef.current;
+    };
+
+    const tryConsumeScan = (raw: string) => {
+      const code = raw.replace(/[\r\n\t\u0000]/g, "").trim();
+      const product = productsRef.current.find((p) => p.barcode === code);
+      if (product) {
+        addToCartRef.current?.(product);
+        return true;
+      }
+      toast.error("Produto não encontrado pelo código de barras");
+      return false;
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "F9") {
         e.preventDefault();
@@ -170,6 +215,33 @@ export default function PDV() {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         searchRef.current?.focus();
+      }
+
+      // Leitor de código de barras (wedge) envia uma sequência rápida + Enter.
+      // Capturamos globalmente para funcionar mesmo sem foco no campo de busca.
+      if (!shouldCaptureGlobalScan()) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const now = Date.now();
+      const lastAt = scanLastAtRef.current;
+      const gap = lastAt == null ? 0 : now - lastAt;
+      if (gap > 250) {
+        scanBufferRef.current = "";
+      }
+      scanLastAtRef.current = now;
+
+      if (e.key === "Enter") {
+        const raw = scanBufferRef.current;
+        scanBufferRef.current = "";
+        if (raw.trim()) {
+          e.preventDefault();
+          tryConsumeScan(raw);
+        }
+        return;
+      }
+
+      if (e.key.length === 1) {
+        scanBufferRef.current += e.key;
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -186,7 +258,7 @@ export default function PDV() {
       document.removeEventListener("visibilitychange", onVisible);
       supabase.removeChannel(channel);
     };
-  }, [loadProducts]);
+  }, [cashModalOpen, loadProducts]);
 
   useEffect(() => {
     const {
@@ -220,6 +292,8 @@ export default function PDV() {
     setSearchTerm("");
     searchRef.current?.focus();
   }, []);
+
+  addToCartRef.current = addToCart;
 
   const updateQuantity = (productId: string, delta: number) => {
     setCart((prev) =>
@@ -294,15 +368,15 @@ export default function PDV() {
 
     setIsFinalizing(true);
     try {
-      const { data: cash } = await supabase
-        .from("cash_registers")
-        .select("id")
-        .eq("status", "open")
-        .order("opened_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data: openCashId, error: openCashErr } = await supabase.rpc("get_open_cash_register_id");
+      if (openCashErr) {
+        cashReceivedSnapshotRef.current = null;
+        toast.error("Não foi possível validar o caixa", { description: openCashErr.message });
+        return;
+      }
 
-      if (!cash?.id) {
+      const cashId = typeof openCashId === "string" ? openCashId : null;
+      if (!cashId) {
         cashReceivedSnapshotRef.current = null;
         toast.error("Caixa fechado. Abra o caixa antes de vender.");
         return;
@@ -324,7 +398,7 @@ export default function PDV() {
         _items: itemsPayload,
         _discount: discountValue,
         _payments: paymentsPayload,
-        _cash_register_id: cash.id,
+        _cash_register_id: cashId,
         _client_id: null,
       });
 
@@ -446,14 +520,10 @@ export default function PDV() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  const code = normalizeBarcodeScan((e.currentTarget as HTMLInputElement).value);
-                  if (!code) return;
-                  const product = products.find((p) => p.barcode === code);
-                  if (product) {
-                    addToCart(product);
-                  } else {
-                    toast.error("Produto não encontrado pelo código de barras");
-                  }
+                  const raw = (e.currentTarget as HTMLInputElement).value;
+                  const product = findProductByBarcode(raw);
+                  if (product) addToCart(product);
+                  else toast.error("Produto não encontrado pelo código de barras");
                 }
               }}
               placeholder="Buscar produto ou código de barras... (Ctrl+K)"
