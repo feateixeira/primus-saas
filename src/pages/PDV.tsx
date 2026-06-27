@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, Plus, Minus, Trash2, X, Percent, DollarSign } from "lucide-react";
 import { CartItem, Payment, Product } from "@/types/models";
+import { canAddProductToCart, getAvailableStock, validateCartStock } from "@/lib/pdv-stock";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -46,7 +47,6 @@ export default function PDV() {
   const [discountType, setDiscountType] = useState<"value" | "percent">("value");
   const [payments, setPayments] = useState<Payment[]>([]);
   const [showPayment, setShowPayment] = useState(false);
-  const [loadingProducts, setLoadingProducts] = useState(true);
   const [primaryMethod, setPrimaryMethod] = useState<Payment["method"]>("dinheiro");
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [cashModalOpen, setCashModalOpen] = useState(false);
@@ -76,7 +76,6 @@ export default function PDV() {
   );
 
   const loadProducts = useCallback(async () => {
-    setLoadingProducts(true);
     const { data, error } = await supabase
       .from("products")
       .select("*")
@@ -84,7 +83,6 @@ export default function PDV() {
 
     if (error) {
       toast.error("Erro ao carregar produtos", { description: error.message });
-      setLoadingProducts(false);
       return;
     }
 
@@ -106,7 +104,6 @@ export default function PDV() {
       };
     });
     setProducts(mapped);
-    setLoadingProducts(false);
   }, []);
 
   const normalizeBarcodeScan = (raw: string) =>
@@ -150,19 +147,41 @@ export default function PDV() {
 
   useEffect(() => {
     if (products.length === 0) return;
-    setCart((prev) =>
-      prev.map((item) => {
+    setCart((prev) => {
+      if (prev.length === 0) return prev;
+
+      const next = prev.flatMap((item) => {
         const product = products.find((p) => p.id === item.productId);
-        const fallbackPrice = product ? parseCurrencyValue(product.salePrice) : 0;
+        if (!product) {
+          toast.error(`"${item.name}" foi removido do carrinho por indisponibilidade.`);
+          return [];
+        }
+
+        const fallbackPrice = parseCurrencyValue(product.salePrice);
         const normalizedUnitPrice = parseCurrencyValue(item.unitPrice);
         const safeUnitPrice = normalizedUnitPrice > 0 ? normalizedUnitPrice : fallbackPrice;
-        return {
+        const safeQty = Math.min(item.quantity, Math.max(0, product.stock));
+
+        if (safeQty <= 0) {
+          toast.error(`"${product.name}" foi removido do carrinho por falta de estoque.`);
+          return [];
+        }
+
+        if (safeQty < item.quantity) {
+          toast.warning(`Quantidade de "${product.name}" ajustada para ${safeQty} un.`);
+        }
+
+        return [{
           ...item,
+          name: product.name,
+          quantity: safeQty,
           unitPrice: safeUnitPrice,
-          total: parseCurrencyValue(item.quantity) * safeUnitPrice,
-        };
-      })
-    );
+          total: safeQty * safeUnitPrice,
+        }];
+      });
+
+      return next;
+    });
   }, [products]);
 
   useEffect(() => {
@@ -199,12 +218,12 @@ export default function PDV() {
     const tryConsumeScan = (raw: string) => {
       const code = raw.replace(/[\r\n\t\u0000]/g, "").trim();
       const product = productsRef.current.find((p) => p.barcode === code);
-      if (product) {
-        addToCartRef.current?.(product);
-        return true;
+      if (!product) {
+        toast.error("Produto não encontrado pelo código de barras");
+        return false;
       }
-      toast.error("Produto não encontrado pelo código de barras");
-      return false;
+      addToCartRef.current?.(product);
+      return true;
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -274,6 +293,13 @@ export default function PDV() {
 
   const addToCart = useCallback((product: Product) => {
     setCart((prev) => {
+      const latest = productsRef.current.find((p) => p.id === product.id) ?? product;
+      const check = canAddProductToCart(latest, prev);
+      if (!check.ok) {
+        toast.error(check.message, check.description ? { description: check.description } : undefined);
+        return prev;
+      }
+
       const existing = prev.find((i) => i.productId === product.id);
       if (existing) {
         const newQty = existing.quantity + 1;
@@ -283,10 +309,10 @@ export default function PDV() {
             : i
         );
       }
-      const unitPrice = parseCurrencyValue(product.salePrice);
+      const unitPrice = parseCurrencyValue(latest.salePrice);
       return [
         ...prev,
-        { productId: product.id, name: product.name, quantity: 1, unitPrice, total: unitPrice },
+        { productId: latest.id, name: latest.name, quantity: 1, unitPrice, total: unitPrice },
       ];
     });
     setSearchTerm("");
@@ -296,15 +322,30 @@ export default function PDV() {
   addToCartRef.current = addToCart;
 
   const updateQuantity = (productId: string, delta: number) => {
-    setCart((prev) =>
-      prev
-        .map((i) => {
-          if (i.productId !== productId) return i;
-          const newQty = Math.max(0, i.quantity + delta);
-          return { ...i, quantity: newQty, total: newQty * i.unitPrice };
-        })
-        .filter((i) => i.quantity > 0)
-    );
+    setCart((prev) => {
+      const product = productsRef.current.find((p) => p.id === productId);
+      const currentItem = prev.find((i) => i.productId === productId);
+      if (!product || !currentItem) return prev;
+
+      const newQty = currentItem.quantity + delta;
+      if (newQty <= 0) {
+        return prev.filter((i) => i.productId !== productId);
+      }
+
+      if (delta > 0) {
+        const check = canAddProductToCart(product, prev, delta);
+        if (!check.ok) {
+          toast.error(check.message, check.description ? { description: check.description } : undefined);
+          return prev;
+        }
+      }
+
+      return prev.map((i) =>
+        i.productId === productId
+          ? { ...i, quantity: newQty, total: newQty * i.unitPrice }
+          : i
+      );
+    });
   };
 
   const removeFromCart = (productId: string) => {
@@ -382,6 +423,28 @@ export default function PDV() {
         return;
       }
 
+      const { data: stockRows, error: stockErr } = await supabase
+        .from("products")
+        .select("id, name, stock")
+        .in(
+          "id",
+          cart.map((i) => i.productId)
+        );
+
+      if (stockErr) {
+        cashReceivedSnapshotRef.current = null;
+        toast.error("Erro ao validar estoque", { description: stockErr.message });
+        return;
+      }
+
+      const stockIssue = validateCartStock(cart, stockRows ?? []);
+      if (stockIssue) {
+        cashReceivedSnapshotRef.current = null;
+        toast.error("Não foi possível finalizar a venda", { description: stockIssue });
+        void loadProducts();
+        return;
+      }
+
     const itemsPayload = cart.map((i) => ({
       product_id: i.productId,
       quantity: i.quantity,
@@ -422,6 +485,7 @@ export default function PDV() {
       setDiscount(0);
       setPayments([]);
       setShowPayment(false);
+      void loadProducts();
       searchRef.current?.focus();
     } finally {
       setIsFinalizing(false);
@@ -543,14 +607,24 @@ export default function PDV() {
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-              {visibleProducts.map((product) => (
+              {visibleProducts.map((product) => {
+                const outOfStock = product.stock <= 0;
+                return (
                 <motion.button
                   key={product.id}
-                  whileTap={{ scale: 0.97 }}
+                  type="button"
+                  whileTap={outOfStock ? undefined : { scale: 0.97 }}
+                  disabled={outOfStock}
                   onClick={() => addToCart(product)}
-                  className="bg-card rounded-xl shadow-card p-4 text-left transition-fast hover:shadow-elevated group"
+                  className={`bg-card rounded-xl shadow-card p-4 text-left transition-fast group ${
+                    outOfStock
+                      ? "opacity-50 cursor-not-allowed"
+                      : "hover:shadow-elevated"
+                  }`}
                 >
-                  <div className="text-sm font-medium text-foreground group-hover:text-primary transition-fast truncate">
+                  <div className={`text-sm font-medium truncate ${
+                    outOfStock ? "text-muted-foreground" : "text-foreground group-hover:text-primary transition-fast"
+                  }`}>
                     {product.name}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1 truncate">
@@ -569,11 +643,12 @@ export default function PDV() {
                           : "bg-success/10 text-success"
                       }`}
                     >
-                      {product.stock} un.
+                      {outOfStock ? "Sem estoque" : `${product.stock} un.`}
                     </span>
                   </div>
                 </motion.button>
-              ))}
+              );
+              })}
             </div>
           )}
         </div>
@@ -589,7 +664,10 @@ export default function PDV() {
             {cart.length === 0 ? (
               <div className="flex items-center justify-center h-full"><p className="text-sm text-muted-foreground">Nenhum produto adicionado</p></div>
             ) : (
-              cart.map((cartItem) => (
+              cart.map((cartItem) => {
+                const product = products.find((p) => p.id === cartItem.productId);
+                const atMaxStock = product ? getAvailableStock(product, cart) <= 0 : true;
+                return (
                 <motion.div key={cartItem.productId} layout initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ type: "spring", duration: 0.3, bounce: 0 }} className="flex items-center justify-between px-4 py-3 border-b border-border group">
                   <div className="flex-1 min-w-0 mr-3">
                     <div className="text-sm font-medium text-foreground truncate">{cartItem.name}</div>
@@ -599,13 +677,20 @@ export default function PDV() {
                     <div className="flex items-center gap-1">
                       <button onClick={() => updateQuantity(cartItem.productId, -1)} className="h-6 w-6 rounded-md bg-muted flex items-center justify-center transition-fast hover:bg-accent"><Minus className="h-3 w-3" /></button>
                       <span className="w-6 text-center text-sm font-mono-tabular font-medium">{cartItem.quantity}</span>
-                      <button onClick={() => updateQuantity(cartItem.productId, 1)} className="h-6 w-6 rounded-md bg-muted flex items-center justify-center transition-fast hover:bg-accent"><Plus className="h-3 w-3" /></button>
+                      <button
+                        onClick={() => updateQuantity(cartItem.productId, 1)}
+                        disabled={atMaxStock}
+                        className="h-6 w-6 rounded-md bg-muted flex items-center justify-center transition-fast hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
                     </div>
                     <span className="font-mono-tabular text-sm font-semibold w-20 text-right">R$ {(Number(cartItem.total) || 0).toFixed(2)}</span>
                     <button onClick={() => removeFromCart(cartItem.productId)} className="h-6 w-6 rounded-md opacity-0 group-hover:opacity-100 flex items-center justify-center text-destructive transition-fast hover:bg-destructive/10"><Trash2 className="h-3 w-3" /></button>
                   </div>
                 </motion.div>
-              ))
+              );
+              })
             )}
           </AnimatePresence>
         </div>

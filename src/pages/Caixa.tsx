@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { DollarSign, ArrowUpCircle, ArrowDownCircle, Lock, Unlock, Eye } from "lucide-react";
+import { ArrowUpCircle, ArrowDownCircle, Lock, Unlock, Eye } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
